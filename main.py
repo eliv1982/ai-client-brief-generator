@@ -2,6 +2,7 @@
 
 Usage examples:
     python main.py example_dialogs/ai_bot_client_dialog.txt --mode client_report
+    python main.py example_dialogs/website_design_dialog.txt --mode design_report
     python main.py input_dialogs/my_dialog.txt --mode client_report
     python main.py --list-files
     python main.py --interactive
@@ -12,6 +13,7 @@ Usage examples:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -28,27 +30,33 @@ from utils.logger import get_logger
 load_dotenv()
 logger = get_logger("main")
 
-# Canonical mode name → alias(es)
-SUPPORTED_MODES = ("client_report", "client_brief")
-_CANONICAL_MODE = "client_report"
-_MODE_ALIASES: dict[str, str] = {"client_brief": "client_report"}
-
-_MODE_DISPLAY = {
+# Mode registry: canonical name -> display label
+_MODES: dict[str, str] = {
     "client_report": "Отчет по клиентскому запросу",
+    "design_report": "Отчет по дизайн-запросу с изображением",
 }
+# Backward-compatible aliases: alias -> canonical
+_MODE_ALIASES: dict[str, str] = {
+    "client_brief": "client_report",
+}
+
+SUPPORTED_MODES = tuple(_MODES) + tuple(_MODE_ALIASES)
+_CANONICAL_DEFAULT = "client_report"
 
 SCAN_DIRS = ("example_dialogs", "input_dialogs")
 
 
 def _canonical(mode: str) -> str:
-    """Resolve alias to canonical mode name."""
     return _MODE_ALIASES.get(mode, mode)
+
+
+def _display(canonical_mode: str) -> str:
+    return _MODES.get(canonical_mode, canonical_mode)
 
 
 # ── File discovery ─────────────────────────────────────────────────────────────
 
 def find_txt_files() -> list[Path]:
-    """Return all .txt files in SCAN_DIRS, sorted by directory then name."""
     found: list[Path] = []
     for dir_name in SCAN_DIRS:
         directory = Path(dir_name)
@@ -58,7 +66,6 @@ def find_txt_files() -> list[Path]:
 
 
 def _file_preview(path: Path) -> str:
-    """Return a short one-line preview of the file (first non-empty line)."""
     try:
         text = path.read_text(encoding="utf-8-sig").strip()
         first_line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
@@ -70,7 +77,6 @@ def _file_preview(path: Path) -> str:
 
 
 def print_file_list(files: list[Path]) -> None:
-    """Print a numbered list of files with size and preview."""
     if not files:
         print("\nТекстовые материалы не найдены в папках: " + ", ".join(SCAN_DIRS))
         print(
@@ -96,7 +102,6 @@ def print_file_list(files: list[Path]) -> None:
 # ── Dialog file reading ────────────────────────────────────────────────────────
 
 def read_dialog_file(path: Path) -> str:
-    """Read *path* as UTF-8 text (BOM-aware). Exits on error."""
     if not path.exists():
         logger.error("File not found: %s", path)
         print(f"\n[ERROR] Файл не найден: {path}", file=sys.stderr)
@@ -122,10 +127,50 @@ def read_dialog_file(path: Path) -> str:
     return text
 
 
-# ── Report generation ──────────────────────────────────────────────────────────
+# ── Error handling helpers ─────────────────────────────────────────────────────
+
+def _handle_openai_errors(exc: Exception) -> None:
+    from utils.validators import BriefValidationError
+
+    if isinstance(exc, EnvironmentError):
+        logger.error("Environment error: %s", exc)
+        print(f"\n[ERROR] {exc}", file=sys.stderr)
+    elif isinstance(exc, BriefValidationError):
+        logger.error("Некорректный ответ от OpenAI:\n%s", exc)
+        print(
+            f"\n[ERROR] OpenAI вернул некорректный или неполный ответ:\n{exc}",
+            file=sys.stderr,
+        )
+    else:
+        logger.error("Ошибка при обращении к OpenAI: %s", exc, exc_info=True)
+        print(f"\n[ERROR] Ошибка при обращении к OpenAI: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+
+def _handle_pdf_errors(exc: Exception) -> None:
+    if isinstance(exc, FileNotFoundError):
+        logger.error("Шаблон не найден: %s", exc)
+        print(f"\n[ERROR] {exc}", file=sys.stderr)
+    elif isinstance(exc, PermissionError):
+        logger.error("PermissionError при сохранении PDF: %s", exc)
+        print(
+            "\n[ERROR] Не удалось сохранить PDF. "
+            "Возможно, файл с таким именем уже открыт. "
+            "Закройте PDF и повторите попытку.",
+            file=sys.stderr,
+        )
+    elif isinstance(exc, RuntimeError):
+        logger.error("Ошибка генерации PDF: %s", exc)
+        print(f"\n[ERROR] {exc}", file=sys.stderr)
+    else:
+        logger.error("Неожиданная ошибка при генерации PDF: %s", exc, exc_info=True)
+        print(f"\n[ERROR] Неожиданная ошибка при генерации PDF: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+
+# ── Mode runners ───────────────────────────────────────────────────────────────
 
 def run_client_report(dialog_path: Path) -> None:
-    """Full pipeline: read file -> OpenAI -> validate -> PDF -> print path."""
     from utils.ai_processor import extract_brief_from_dialog
     from utils.pdf_generator import render_client_brief_pdf
     from utils.validators import BriefValidationError
@@ -135,101 +180,240 @@ def run_client_report(dialog_path: Path) -> None:
 
     try:
         brief_data = extract_brief_from_dialog(dialog_text)
-    except EnvironmentError as exc:
-        logger.error("Environment error: %s", exc)
-        print(f"\n[ERROR] {exc}", file=sys.stderr)
-        sys.exit(1)
-    except BriefValidationError as exc:
-        logger.error("Некорректный ответ от OpenAI:\n%s", exc)
-        print(
-            f"\n[ERROR] OpenAI вернул некорректный или неполный ответ:\n{exc}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    except Exception as exc:
-        logger.error("Ошибка при обращении к OpenAI: %s", exc, exc_info=True)
-        print(f"\n[ERROR] Ошибка при обращении к OpenAI: {exc}", file=sys.stderr)
-        sys.exit(1)
+    except (EnvironmentError, BriefValidationError, Exception) as exc:
+        _handle_openai_errors(exc)
+        return
 
     try:
         pdf_path = render_client_brief_pdf(brief_data)
-    except FileNotFoundError as exc:
-        logger.error("Шаблон не найден: %s", exc)
-        print(f"\n[ERROR] {exc}", file=sys.stderr)
-        sys.exit(1)
-    except PermissionError as exc:
-        logger.error("PermissionError при сохранении PDF: %s", exc)
-        print(
-            "\n[ERROR] Не удалось сохранить PDF. "
-            "Возможно, файл с таким именем уже открыт. "
-            "Закройте PDF и повторите попытку.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    except RuntimeError as exc:
-        logger.error("Ошибка генерации PDF: %s", exc)
-        print(f"\n[ERROR] {exc}", file=sys.stderr)
-        sys.exit(1)
     except Exception as exc:
-        logger.error("Неожиданная ошибка при генерации PDF: %s", exc, exc_info=True)
-        print(f"\n[ERROR] Неожиданная ошибка при генерации PDF: {exc}", file=sys.stderr)
-        sys.exit(1)
+        _handle_pdf_errors(exc)
+        return
 
     print(f"\n[OK] Отчет успешно сформирован!\n  -> {pdf_path.resolve()}\n")
 
 
+def run_design_report(dialog_path: Path) -> None:
+    from utils.ai_processor import extract_design_report_from_dialog
+    from utils.image_generator import generate_design_image
+    from utils.pdf_generator import render_design_report_pdf
+    from utils.validators import BriefValidationError
+
+    logger.info("Чтение файла диалога: %s", dialog_path)
+    dialog_text = read_dialog_file(dialog_path)
+
+    try:
+        design_data = extract_design_report_from_dialog(dialog_text)
+    except (EnvironmentError, BriefValidationError, Exception) as exc:
+        _handle_openai_errors(exc)
+        return
+
+    image_prompt = design_data.get("image_prompt", "")
+    image_path: Path | None = None
+    if image_prompt:
+        logger.info("Generating concept image ...")
+        image_path = generate_design_image(image_prompt)
+        if image_path:
+            logger.info("Concept image ready: %s", image_path)
+        else:
+            logger.warning(
+                "Image generation skipped or failed — PDF will be generated without image."
+            )
+            print(
+                "[WARNING] Изображение не было сгенерировано. "
+                "Подробности смотрите в логах.",
+                file=sys.stderr,
+            )
+    else:
+        logger.warning("image_prompt is empty — skipping image generation.")
+        print(
+            "[WARNING] image_prompt пустой — генерация изображения пропущена.",
+            file=sys.stderr,
+        )
+
+    try:
+        pdf_path = render_design_report_pdf(design_data, image_path)
+    except Exception as exc:
+        _handle_pdf_errors(exc)
+        return
+
+    print(f"\n[OK] Отчет успешно сформирован!\n  -> {pdf_path.resolve()}\n")
+    if image_path:
+        print(f"     Изображение: {image_path.resolve()}\n")
+
+
 # ── CLI modes ──────────────────────────────────────────────────────────────────
 
+def cmd_test_image() -> None:
+    """--test-image: диагностика image API — полный вывод ошибки."""
+    from utils.image_generator import (
+        generate_test_image,
+        list_available_image_models,
+        _DEFAULT_MODEL,
+        _DEFAULT_SIZE,
+        _DEFAULT_QUALITY,
+    )
+
+    model = os.getenv("IMAGE_MODEL", _DEFAULT_MODEL)
+    size = os.getenv("IMAGE_SIZE", _DEFAULT_SIZE)
+    quality = os.getenv("IMAGE_QUALITY", _DEFAULT_QUALITY)
+    api_key = os.getenv("OPENAI_API_KEY", "")
+
+    print("\nДиагностика image API")
+    print("=" * 48)
+    print(f"  Модель      : {model}")
+    print(f"  Размер      : {size}")
+    print(f"  Качество    : {quality}")
+    print(f"  API key     : {'задан (' + api_key[:8] + '...)' if api_key else 'НЕ ЗАДАН'}")
+    print(f"  Endpoint    : https://api.openai.com/v1/images/generations")
+    print()
+
+    image_path, error_text = generate_test_image()
+
+    if image_path:
+        print(f"[OK] Тестовое изображение сохранено:\n  -> {image_path.resolve()}\n")
+        return
+
+    # ── Неудача — максимально подробный вывод ─────────────────────────────────
+    print("[ERROR] Генерация тестового изображения не удалась.", file=sys.stderr)
+    print(file=sys.stderr)
+
+    if error_text:
+        print("Текст ошибки от OpenAI API:", file=sys.stderr)
+        print("-" * 48, file=sys.stderr)
+        print(error_text, file=sys.stderr)
+        print("-" * 48, file=sys.stderr)
+        print(file=sys.stderr)
+
+    # Специфичная диагностика по тексту ошибки
+    err_lower = (error_text or "").lower()
+    if not api_key:
+        print(
+            "[HINT] OPENAI_API_KEY не задан. Добавьте его в файл .env и повторите.",
+            file=sys.stderr,
+        )
+    elif "does not exist" in err_lower or "invalid_value" in err_lower and "model" in err_lower:
+        print(
+            f"[ERROR] Модель '{model}' недоступна для текущего OpenAI project / account.\n"
+            "  Проверьте Billing, Limits и Project API key на platform.openai.com",
+            file=sys.stderr,
+        )
+        print(file=sys.stderr)
+        # Пробуем вывести список доступных image-моделей
+        print("  Запрашиваем доступные image-модели для вашего аккаунта ...", file=sys.stderr)
+        available = list_available_image_models()
+        if available:
+            print(f"  Доступные модели: {', '.join(available)}", file=sys.stderr)
+            print(
+                f"\n  Обновите IMAGE_MODEL в .env — например:\n"
+                f"    IMAGE_MODEL={available[0]}",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "  Список моделей получить не удалось. "
+                "Проверьте API key и интернет-соединение.",
+                file=sys.stderr,
+            )
+    elif "invalid_value" in err_lower and "quality" in err_lower:
+        print(
+            f"[HINT] Значение quality='{quality}' не поддерживается моделью '{model}'.\n"
+            "  Для gpt-image-2 / gpt-image-1 используйте: low, medium, high, auto",
+            file=sys.stderr,
+        )
+    elif "invalid_value" in err_lower and "size" in err_lower:
+        print(
+            f"[HINT] Значение size='{size}' не поддерживается моделью '{model}'.\n"
+            "  Для gpt-image-2 / gpt-image-1: 1024x1024, 1536x1024, 1024x1536",
+            file=sys.stderr,
+        )
+    elif "billing" in err_lower or "quota" in err_lower or "insufficient" in err_lower:
+        print(
+            "[HINT] Проблема с оплатой или квотой.\n"
+            "  Проверьте баланс на platform.openai.com/account/billing",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "  Подробности смотрите в логах выше.\n"
+            "  Документация: https://platform.openai.com/docs/api-reference/images",
+            file=sys.stderr,
+        )
+
+    sys.exit(1)
+
+
 def cmd_list_files() -> None:
-    """--list-files: show available .txt files without generating anything."""
-    files = find_txt_files()
-    print_file_list(files)
+    print_file_list(find_txt_files())
 
 
-def cmd_interactive(mode: str) -> None:
-    """--interactive: let the user pick a file from the discovered list."""
-    canonical = _canonical(mode)
+def _pick_file(files: list[Path]) -> Path:
+    """Interactive file picker. Returns the chosen Path."""
+    while True:
+        raw = input("Введите номер файла: ").strip()
+        if not raw.isdigit():
+            print(f"  Введите число от 1 до {len(files)}.")
+            continue
+        idx = int(raw)
+        if not (1 <= idx <= len(files)):
+            print(f"  Номер должен быть от 1 до {len(files)}.")
+            continue
+        return files[idx - 1]
+
+
+def _pick_mode() -> str:
+    """Interactive mode picker. Returns canonical mode name."""
+    canonical_modes = list(_MODES.keys())
+    print("\nТип отчета:\n")
+    for i, mode in enumerate(canonical_modes, start=1):
+        print(f"  [{i}] {_display(mode)}")
+    print()
+    while True:
+        raw = input("Введите номер типа отчета (Enter = 1): ").strip()
+        if raw == "":
+            return canonical_modes[0]
+        if not raw.isdigit():
+            print(f"  Введите число от 1 до {len(canonical_modes)}.")
+            continue
+        idx = int(raw)
+        if not (1 <= idx <= len(canonical_modes)):
+            print(f"  Номер должен быть от 1 до {len(canonical_modes)}.")
+            continue
+        return canonical_modes[idx - 1]
+
+
+def cmd_interactive(default_mode: str) -> None:
     files = find_txt_files()
     if not files:
         print_file_list(files)
         sys.exit(0)
 
     print_file_list(files)
-    while True:
-        raw = input("Введите номер файла: ").strip()
-        if not raw.isdigit():
-            print("  Введите число от 1 до " + str(len(files)) + ".")
-            continue
-        idx = int(raw)
-        if not (1 <= idx <= len(files)):
-            print(f"  Номер должен быть от 1 до {len(files)}.")
-            continue
-        break
+    chosen = _pick_file(files)
 
-    chosen = files[idx - 1]
-    display_mode = _MODE_DISPLAY.get(canonical, canonical)
+    canonical = _pick_mode()
+    label = _display(canonical)
     print(f"\nВыбран файл: {chosen}")
-    print(f"Тип отчета: {display_mode}\n")
+    print(f"Тип отчета: {label}\n")
     logger.info("Interactive: выбран '%s', режим=%s", chosen, canonical)
 
+    _dispatch(chosen, canonical)
+
+
+def _dispatch(dialog_path: Path, canonical: str) -> None:
     if canonical == "client_report":
-        run_client_report(chosen)
+        run_client_report(dialog_path)
+    elif canonical == "design_report":
+        run_design_report(dialog_path)
     else:
         print(f"[ERROR] Режим '{canonical}' еще не реализован.", file=sys.stderr)
         sys.exit(1)
 
 
 def cmd_run_file(dialog_path: Path, mode: str) -> None:
-    """Direct file path mode."""
     canonical = _canonical(mode)
-    display_mode = _MODE_DISPLAY.get(canonical, canonical)
-    logger.info("Тип отчета: %s | Файл: %s", display_mode, dialog_path)
-
-    if canonical == "client_report":
-        run_client_report(dialog_path)
-    else:
-        print(f"[ERROR] Режим '{canonical}' еще не реализован.", file=sys.stderr)
-        sys.exit(1)
+    logger.info("Тип отчета: %s | Файл: %s", _display(canonical), dialog_path)
+    _dispatch(dialog_path, canonical)
 
 
 # ── Argument parsing ───────────────────────────────────────────────────────────
@@ -242,6 +426,7 @@ def parse_args() -> argparse.Namespace:
             "Преобразует транскрибацию клиентского диалога в PDF-отчет.\n\n"
             "Примеры:\n"
             "  python main.py example_dialogs/ai_bot_client_dialog.txt --mode client_report\n"
+            "  python main.py example_dialogs/website_design_dialog.txt --mode design_report\n"
             "  python main.py --list-files\n"
             "  python main.py --interactive"
         ),
@@ -257,9 +442,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mode",
         choices=SUPPORTED_MODES,
-        default=_CANONICAL_MODE,
+        default=_CANONICAL_DEFAULT,
         help=(
-            "Тип отчета (по умолчанию: client_report). "
+            "Тип отчета: client_report (по умолчанию) или design_report. "
             "client_brief — технический alias для client_report."
         ),
     )
@@ -271,7 +456,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--interactive",
         action="store_true",
-        help="Интерактивный выбор файла из списка.",
+        help="Интерактивный выбор файла и типа отчета.",
+    )
+    parser.add_argument(
+        "--test-image",
+        action="store_true",
+        help="Диагностика: сгенерировать тестовое изображение и сохранить в generated_images/.",
     )
     return parser.parse_args()
 
@@ -280,6 +470,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+
+    if args.test_image:
+        cmd_test_image()
+        return
 
     if args.list_files:
         cmd_list_files()

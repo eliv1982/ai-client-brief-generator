@@ -1,32 +1,502 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <title>Design Report — {{ project_name }}</title>
+  <title>Дизайн-отчет — {{ company_or_project }}</title>
   <style>
-    /* TODO: Implement design report template in Phase 2.
-       This is a placeholder stub for the --mode design_report feature. */
-    body {
-      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-      padding: 40px;
-      color: #1f2937;
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    @page {
+      size: A4;
+      margin: 18mm 18mm 22mm 18mm;
+
+      @bottom-center {
+        content: "Стр. " counter(page) " из " counter(pages);
+        font-family: "DejaVu Sans", "Arial", "Segoe UI", sans-serif;
+        font-size: 8pt;
+        color: #9ca3af;
+      }
     }
-    h1 { color: #2563eb; }
-    .note {
-      background: #fef3c7;
-      border-left: 4px solid #f59e0b;
-      padding: 12px 16px;
+
+    body {
+      font-family: "DejaVu Sans", "Arial", "Segoe UI", sans-serif;
+      font-size: 10.5pt;
+      line-height: 1.65;
+      color: #1f2937;
+      background: #ffffff;
+      word-break: normal;
+      overflow-wrap: anywhere;
+      hyphens: auto;
+    }
+
+    /* ── Cover ────────────────────────────────────────────── */
+    .cover {
+      background: linear-gradient(135deg, #312e81 0%, #7c3aed 100%);
+      color: #ffffff;
+      padding: 38px 40px 32px;
+      border-radius: 4px;
+      margin-bottom: 32px;
+      page-break-inside: avoid;
+    }
+
+    .cover-label {
+      font-size: 8pt;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      opacity: 0.75;
+      margin-bottom: 10px;
+    }
+
+    .cover-title {
+      font-size: 22pt;
+      font-weight: 700;
+      line-height: 1.2;
+      margin-bottom: 6px;
+      word-break: normal;
+      overflow-wrap: anywhere;
+    }
+
+    .cover-subtitle {
+      font-size: 12pt;
+      opacity: 0.85;
+      margin-bottom: 24px;
+    }
+
+    .cover-meta {
+      display: flex;
+      gap: 28px;
+      flex-wrap: wrap;
+    }
+
+    .cover-meta-item {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .cover-meta-item .meta-label {
+      font-size: 7.5pt;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      opacity: 0.65;
+      margin-bottom: 2px;
+    }
+
+    .cover-meta-item .meta-value {
+      font-size: 10pt;
+      font-weight: 600;
+    }
+
+    /* ── Section ──────────────────────────────────────────── */
+    .section {
+      margin-bottom: 26px;
+      page-break-inside: avoid;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .section-marker {
+      width: 4px;
+      height: 22px;
+      border-radius: 2px;
+      background: #7c3aed;
+      flex-shrink: 0;
+    }
+
+    .section-marker--green  { background: #16a34a; }
+    .section-marker--warn   { background: #d97706; }
+    .section-marker--slate  { background: #64748b; }
+    .section-marker--violet { background: #7c3aed; }
+
+    .section-title {
+      font-size: 10.5pt;
+      font-weight: 700;
+      color: #312e81;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+
+    .section-divider {
+      height: 2px;
+      background: linear-gradient(90deg, #7c3aed 0%, #ddd6fe 60%, transparent 100%);
+      margin-bottom: 12px;
+      border-radius: 1px;
+    }
+
+    .section-divider--green  { background: linear-gradient(90deg, #16a34a 0%, #bbf7d0 60%, transparent 100%); }
+    .section-divider--warn   { background: linear-gradient(90deg, #d97706 0%, #fde68a 60%, transparent 100%); }
+    .section-divider--slate  { background: linear-gradient(90deg, #64748b 0%, #cbd5e1 60%, transparent 100%); }
+
+    /* ── Prose ────────────────────────────────────────────── */
+    .prose {
+      color: #374151;
+      line-height: 1.7;
+    }
+
+    /* ── Summary box ──────────────────────────────────────── */
+    .summary-box {
+      background: #f5f3ff;
+      border-left: 4px solid #7c3aed;
+      padding: 14px 18px;
       border-radius: 0 6px 6px 0;
-      margin-top: 24px;
+      color: #312e81;
+      font-style: italic;
+      line-height: 1.75;
+    }
+
+    /* ── Two-column meta row ──────────────────────────────── */
+    .meta-row {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 26px;
+    }
+
+    .meta-card {
+      flex: 1;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 14px 18px;
+    }
+
+    .meta-card .card-label {
+      font-size: 7.5pt;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #6b7280;
+      margin-bottom: 4px;
+    }
+
+    .meta-card .card-value {
+      font-size: 11pt;
+      font-weight: 600;
+      color: #111827;
+      word-break: normal;
+      overflow-wrap: anywhere;
+    }
+
+    /* ── Pill tags (for key sections) ─────────────────────── */
+    .tag-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .tag {
+      background: #ede9fe;
+      color: #4c1d95;
+      border: 1px solid #c4b5fd;
+      border-radius: 20px;
+      padding: 3px 12px;
+      font-size: 9pt;
+      font-weight: 600;
+    }
+
+    /* ── Bullet list ──────────────────────────────────────── */
+    .bullet-list {
+      list-style: none;
+      padding: 0;
+    }
+
+    .bullet-list li {
+      position: relative;
+      padding-left: 18px;
+      margin-bottom: 7px;
+      color: #374151;
+      line-height: 1.65;
+    }
+
+    .bullet-list li::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 8px;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #7c3aed;
+    }
+
+    /* ── Risk list ────────────────────────────────────────── */
+    .risk-list {
+      list-style: none;
+      padding: 0;
+    }
+
+    .risk-list li {
+      position: relative;
+      padding-left: 18px;
+      margin-bottom: 7px;
+      color: #374151;
+      line-height: 1.65;
+    }
+
+    .risk-list li::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 8px;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #d97706;
+    }
+
+    /* ── Numbered steps ───────────────────────────────────── */
+    .step-list {
+      list-style: none;
+      padding: 0;
+    }
+
+    .step-list li {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 8px;
+      color: #374151;
+      line-height: 1.65;
+    }
+
+    .step-num {
+      flex-shrink: 0;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: #7c3aed;
+      color: #fff;
+      font-size: 8.5pt;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 1px;
+    }
+
+    /* ── Concept image ────────────────────────────────────── */
+    .concept-wrap {
+      page-break-inside: avoid;
+      break-inside: avoid;
+      page-break-before: always;
+    }
+
+    .concept-image {
+      width: 100%;
+      height: auto;
+      max-height: 520px;
+      object-fit: contain;
+      object-position: center;
+      border-radius: 6px;
+      border: 1px solid #e5e7eb;
+      display: block;
+      background: #f9fafb;
+    }
+
+    .concept-placeholder {
+      background: #f5f3ff;
+      border: 1.5px dashed #c4b5fd;
+      border-radius: 6px;
+      padding: 24px 20px;
+      color: #6b7280;
+      font-style: italic;
+      font-size: 9.5pt;
+      text-align: center;
+    }
+
+
+    /* ── Footer ───────────────────────────────────────────── */
+    .doc-footer {
+      margin-top: 36px;
+      padding-top: 12px;
+      border-top: 1px solid #e5e7eb;
+      font-size: 8pt;
+      color: #9ca3af;
+      text-align: right;
+    }
+
+    .empty {
+      color: #9ca3af;
+      font-style: italic;
     }
   </style>
 </head>
 <body>
-  <h1>Design Report — {{ project_name }}</h1>
-  <div class="note">
-    <strong>Phase 2 — not implemented yet.</strong><br/>
-    The <code>design_report</code> mode will be built in the next iteration,
-    including visual analysis, mood board references, and generated cover imagery.
+
+  <!-- ── Обложка ─────────────────────────────────────────── -->
+  <div class="cover">
+    <div class="cover-label">Отчет по дизайн-запросу</div>
+    <div class="cover-title">{{ company_or_project }}</div>
+    <div class="cover-subtitle">{{ project_type }}</div>
+    <div class="cover-meta">
+      <div class="cover-meta-item">
+        <span class="meta-label">Клиент</span>
+        <span class="meta-value">{{ client_name }}</span>
+      </div>
+      <div class="cover-meta-item">
+        <span class="meta-label">Сроки</span>
+        <span class="meta-value">{{ deadline }}</span>
+      </div>
+      <div class="cover-meta-item">
+        <span class="meta-label">Бюджет</span>
+        <span class="meta-value">{{ budget }}</span>
+      </div>
+      <div class="cover-meta-item">
+        <span class="meta-label">Дата формирования</span>
+        <span class="meta-value">{{ generated_at }}</span>
+      </div>
+    </div>
   </div>
+
+  <!-- ── Краткое резюме ─────────────────────────────────── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-marker"></div>
+      <div class="section-title">Краткое резюме</div>
+    </div>
+    <div class="section-divider"></div>
+    <div class="summary-box">{{ summary }}</div>
+  </div>
+
+  <!-- ── Цель дизайна ───────────────────────────────────── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-marker"></div>
+      <div class="section-title">Цель дизайна</div>
+    </div>
+    <div class="section-divider"></div>
+    <div class="prose">{{ design_goal }}</div>
+  </div>
+
+  <!-- ── Целевая аудитория ──────────────────────────────── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-marker"></div>
+      <div class="section-title">Целевая аудитория</div>
+    </div>
+    <div class="section-divider"></div>
+    <div class="prose">{{ target_audience }}</div>
+  </div>
+
+  <!-- ── Сроки и Бюджет ─────────────────────────────────── -->
+  <div class="meta-row">
+    <div class="meta-card">
+      <div class="card-label">Сроки</div>
+      <div class="card-value">{{ deadline }}</div>
+    </div>
+    <div class="meta-card">
+      <div class="card-label">Бюджет</div>
+      <div class="card-value">{{ budget }}</div>
+    </div>
+  </div>
+
+  <!-- ── Визуальные предпочтения ────────────────────────── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-marker"></div>
+      <div class="section-title">Визуальные предпочтения</div>
+    </div>
+    <div class="section-divider"></div>
+    <div class="prose">
+      <strong>Стиль:</strong> {{ preferred_style }}<br/>
+      <strong>Цвета и референсы:</strong> {{ colors_or_visual_preferences }}
+    </div>
+  </div>
+
+  <!-- ── Основные блоки сайта ───────────────────────────── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-marker"></div>
+      <div class="section-title">Основные блоки сайта</div>
+    </div>
+    <div class="section-divider"></div>
+    {% if key_sections %}
+      <div class="tag-list">
+        {% for section in key_sections %}
+          <span class="tag">{{ section }}</span>
+        {% endfor %}
+      </div>
+    {% else %}
+      <span class="empty">Блоки не были обозначены.</span>
+    {% endif %}
+  </div>
+
+  <!-- ── Функциональные требования ─────────────────────── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-marker section-marker--green"></div>
+      <div class="section-title">Функциональные требования</div>
+    </div>
+    <div class="section-divider section-divider--green"></div>
+    {% if functional_requirements %}
+      <ul class="bullet-list">
+        {% for req in functional_requirements %}
+          <li>{{ req }}</li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <span class="empty">Требования не были обозначены.</span>
+    {% endif %}
+  </div>
+
+  <!-- ── Риски и вопросы для уточнения ─────────────────── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-marker section-marker--warn"></div>
+      <div class="section-title">Риски и вопросы для уточнения</div>
+    </div>
+    <div class="section-divider section-divider--warn"></div>
+    {% if risks_or_open_questions %}
+      <ul class="risk-list">
+        {% for risk in risks_or_open_questions %}
+          <li>{{ risk }}</li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <span class="empty">Риски и открытые вопросы не выявлены.</span>
+    {% endif %}
+  </div>
+
+  <!-- ── Рекомендуемые следующие шаги ──────────────────── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-marker section-marker--slate"></div>
+      <div class="section-title">Рекомендуемые следующие шаги</div>
+    </div>
+    <div class="section-divider section-divider--slate"></div>
+    {% if next_steps %}
+      <ol class="step-list">
+        {% for step in next_steps %}
+          <li><span class="step-num">{{ loop.index }}</span><span>{{ step }}</span></li>
+        {% endfor %}
+      </ol>
+    {% else %}
+      <span class="empty">Следующие шаги не определены.</span>
+    {% endif %}
+  </div>
+
+  <!-- ── Визуальная концепция ───────────────────────────── -->
+  <div class="section concept-wrap">
+    <div class="section-header">
+      <div class="section-marker section-marker--violet"></div>
+      <div class="section-title">Визуальная концепция</div>
+    </div>
+    <div class="section-divider"></div>
+    {% if image_uri %}
+      <img class="concept-image" src="{{ image_uri }}" alt="Визуальная концепция" />
+    {% else %}
+      <div class="concept-placeholder">
+        Изображение не было сгенерировано. Проверьте настройки image API.
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- ── Подвал ──────────────────────────────────────────── -->
+  <div class="doc-footer">
+    Отчет сформирован автоматически с помощью AI Client Brief Generator &middot; {{ generated_at }}
+  </div>
+
 </body>
 </html>

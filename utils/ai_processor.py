@@ -6,7 +6,7 @@ import os
 from openai import OpenAI, OpenAIError
 
 from utils.logger import get_logger
-from utils.validators import BriefValidationError, validate_brief
+from utils.validators import BriefValidationError, validate_brief, validate_design_report
 
 logger = get_logger(__name__)
 
@@ -55,13 +55,67 @@ BRIEF_SYSTEM_PROMPT = """Ты — опытный бизнес-аналитик. 
 
 
 def extract_brief_from_dialog(dialog_text: str) -> dict:
-    """Send *dialog_text* to OpenAI and return the validated brief dict.
+    """Send *dialog_text* to OpenAI and return the validated client_report dict.
 
     Raises:
         EnvironmentError: if OPENAI_API_KEY is not set.
         OpenAIError: on API-level failures.
-        BriefValidationError: if the response is not valid JSON or fails schema checks.
+        BriefValidationError: if the response fails schema checks.
     """
+    data = _call_openai(BRIEF_SYSTEM_PROMPT, dialog_text)
+    logger.info("Response received — validating schema ...")
+    validated = validate_brief(data)
+    logger.info("Schema validation passed.")
+    return validated
+
+
+# ── Design report prompt & extractor ──────────────────────────────────────────
+
+DESIGN_SYSTEM_PROMPT = """Ты — опытный арт-директор и бизнес-аналитик. Твоя задача — прочитать расшифровку диалога с клиентом о дизайне сайта или лендинга и извлечь из него структурированную информацию для формирования дизайн-отчета.
+
+Верни ТОЛЬКО валидный JSON-объект — без markdown-обертки, без лишнего текста — строго со следующими полями:
+
+{
+  "client_name": "строка — полное имя клиента, или «Не указано»",
+  "company_or_project": "строка — название компании или проекта, или «Не указано»",
+  "project_type": "строка — тип проекта: лендинг, корпоративный сайт, интернет-магазин и т.д.",
+  "design_goal": "строка — основная цель дизайна, сформулированная четко",
+  "target_audience": "строка — целевая аудитория проекта",
+  "preferred_style": "строка — визуальный стиль: минимализм, корпоративный, яркий и т.д.",
+  "key_sections": ["строка — название блока или раздела сайта", "..."],
+  "colors_or_visual_preferences": "строка — предпочтения по цветам, шрифтам, референсам",
+  "functional_requirements": ["строка — конкретное функциональное требование", "..."],
+  "deadline": "строка — сроки из диалога, или «Не указан»",
+  "budget": "строка — бюджет из диалога, или «Не обсуждалось», или «Требует уточнения»",
+  "risks_or_open_questions": ["строка — риск или вопрос, требующий уточнения", "..."],
+  "next_steps": ["строка — конкретное действие на следующем этапе", "..."],
+  "summary": "строка — деловое резюме диалога в 2–4 предложениях",
+  "image_prompt": "string — English-language prompt for AI image generation. Create a clean visual moodboard or hero-style landing page concept. STRICT RULES: no readable text, no letters, no words, no UI copy, no logos, no labels, no button captions, no menu items, no headings, no captions anywhere in the image. If UI elements are needed, show them only as abstract lines, rectangles, or placeholder blocks — no text on them. Describe only: visual style, color palette, mood, lighting, composition, and key visual elements. Example: 'Minimalist yoga studio hero concept, warm beige and terracotta palette, soft natural side lighting, woman silhouette in meditation pose, clean open layout, abstract card shapes with no text, premium illustration style, no letters, no words.'"
+}
+
+Требования к стилю русскоязычных полей:
+- Деловой, точный русский язык — без канцелярита и рекламных клише.
+- Не использовать букву «е» вместо «е» (не использовать «е» с двумя точками вообще).
+- Каждое предложение и пункт начинать с заглавной буквы.
+- Не выдумывать факты, которых не было в диалоге.
+
+Правила извлечения данных:
+- Имена собственные и названия сервисов не переводить: Tilda, WordPress, Yclients, Figma, Behance, Google Analytics и другие.
+- Бюджет:
+  * если назван в рублях — сохранять как есть, например «от 80 000 до 120 000 руб.»;
+  * если в другой валюте — сохранять без конвертации;
+  * если не назван — писать «Не обсуждалось»;
+  * если упомянут, но не конкретизирован — писать «Требует уточнения».
+- Сроки: записывать как в диалоге; если не упомянуты — писать «Не указан».
+- Поле image_prompt: ВСЕГДА на английском языке. Описывать визуальную концепцию, стиль, настроение и цветовую палитру. Обязательно включать фразы: "no readable text", "no letters", "no words", "no UI copy", "no logos", "no labels". Элементы интерфейса — только как абстрактные блоки и линии без текста.
+- Каждое поле обязательно. Для списков — пустой список [], если данных нет.
+- Не добавлять поля сверх схемы.
+- Не оборачивать результат в markdown-блоки.
+"""
+
+
+def _call_openai(system_prompt: str, dialog_text: str) -> dict:
+    """Shared OpenAI call logic. Returns raw parsed JSON dict."""
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise EnvironmentError(
@@ -72,7 +126,7 @@ def extract_brief_from_dialog(dialog_text: str) -> dict:
     model = os.getenv("OPENAI_MODEL", "gpt-4o")
     client = OpenAI(api_key=api_key)
 
-    logger.info("Sending dialog to OpenAI (model: %s) …", model)
+    logger.info("Sending dialog to OpenAI (model: %s) ...", model)
 
     try:
         response = client.chat.completions.create(
@@ -80,7 +134,7 @@ def extract_brief_from_dialog(dialog_text: str) -> dict:
             temperature=0.2,
             response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": BRIEF_SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": dialog_text},
             ],
         )
@@ -92,14 +146,24 @@ def extract_brief_from_dialog(dialog_text: str) -> dict:
     logger.debug("Raw OpenAI response:\n%s", raw_content)
 
     try:
-        data = json.loads(raw_content)
+        return json.loads(raw_content)
     except json.JSONDecodeError as exc:
         raise BriefValidationError(
             f"OpenAI returned content that is not valid JSON: {exc}\n"
             f"Response was:\n{raw_content}"
         ) from exc
 
-    logger.info("Response received — validating schema …")
-    validated = validate_brief(data)
+
+def extract_design_report_from_dialog(dialog_text: str) -> dict:
+    """Send *dialog_text* to OpenAI and return the validated design report dict.
+
+    Raises:
+        EnvironmentError: if OPENAI_API_KEY is not set.
+        OpenAIError: on API-level failures.
+        BriefValidationError: if the response fails schema checks.
+    """
+    data = _call_openai(DESIGN_SYSTEM_PROMPT, dialog_text)
+    logger.info("Response received — validating design_report schema ...")
+    validated = validate_design_report(data)
     logger.info("Schema validation passed.")
     return validated
