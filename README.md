@@ -47,11 +47,7 @@ python main.py example_dialogs/website_design_dialog.txt --mode design_report --
 
 PDF в этом случае формируется как обычно, с placeholder-блоком вместо изображения. Если image API не настроен или запрос завершился ошибкой (и флаг `--no-image` не указан), текстовый PDF все равно будет сформирован — с тем же placeholder-блоком.
 
-Проверить доступность моделей и подключение к image API можно командой (внимание: это **реальный, потенциально платный** запрос):
-
-```bash
-python main.py --test-image
-```
+Проверить доступность моделей и подключение к image API можно командой `python main.py --test-image` (подробнее об этой команде — в разделе «Все команды» ниже).
 
 ### `client_brief` — технический alias
 
@@ -246,17 +242,17 @@ generated_images/design_concept_2026-06-06_15-42-05.png
 
 ---
 
-## Example output
+## Пример результата
 
-This repository includes a fictional portfolio example generated through the real application pipeline using `example_dialogs/website_design_dialog.txt`.
+В репозитории есть вымышленный пример для портфолио, сгенерированный через реальный пайплайн приложения на основе `example_dialogs/website_design_dialog.txt`.
 
-[View the generated PDF report](docs/sample_design_report.pdf)
+[Открыть сгенерированный PDF-отчет](docs/sample_design_report.pdf)
 
-![Generated design concept](docs/sample_design_concept.png)
+![Сгенерированная дизайн-концепция](docs/sample_design_concept.png)
 
-> Fictional demo data only. No real client information is included.
+> Только вымышленные демо-данные. Реальная информация о клиентах не используется.
 
-This example was produced end-to-end through the real pipeline — OpenAI text generation, GPT image generation, Jinja2 rendering, and WeasyPrint PDF generation — not from mocked test data.
+Пример получен через весь реальный пайплайн — генерацию текста через OpenAI, генерацию изображения, рендеринг Jinja2 и сборку PDF через WeasyPrint, — а не из замоканных тестовых данных.
 
 ---
 
