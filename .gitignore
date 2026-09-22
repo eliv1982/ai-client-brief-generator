@@ -23,6 +23,9 @@ env/
 *.swp
 *.swo
 
+# Test artifacts
+.pytest_cache/
+
 # Generated output
 reports/*.pdf
 generated_images/*.png

@@ -10,6 +10,18 @@ from utils.validators import BriefValidationError, validate_brief, validate_desi
 
 logger = get_logger(__name__)
 
+# ── Bounded network behavior ────────────────────────────────────────────────
+# Explicit, small values instead of relying on SDK defaults — this is a
+# small CLI tool, not a service that should retry indefinitely.
+_REQUEST_TIMEOUT_SECONDS = 60.0
+_MAX_RETRIES = 2
+
+# Output-token ceilings, sized for each compact JSON schema — generous
+# enough for real narrative text, bounded enough to cap cost/latency on a
+# runaway completion.
+_MAX_OUTPUT_TOKENS_BRIEF = 2000
+_MAX_OUTPUT_TOKENS_DESIGN = 2500
+
 BRIEF_SYSTEM_PROMPT = """Ты — опытный бизнес-аналитик. Твоя задача — прочитать расшифровку диалога с клиентом и извлечь из него структурированную информацию для формирования отчета по клиентскому запросу.
 
 Верни ТОЛЬКО валидный JSON-объект — без markdown-обертки, без лишнего текста — строго со следующими полями:
@@ -62,7 +74,7 @@ def extract_brief_from_dialog(dialog_text: str) -> dict:
         OpenAIError: on API-level failures.
         BriefValidationError: if the response fails schema checks.
     """
-    data = _call_openai(BRIEF_SYSTEM_PROMPT, dialog_text)
+    data = _call_openai(BRIEF_SYSTEM_PROMPT, dialog_text, _MAX_OUTPUT_TOKENS_BRIEF)
     logger.info("Response received — validating schema ...")
     validated = validate_brief(data)
     logger.info("Schema validation passed.")
@@ -114,8 +126,14 @@ DESIGN_SYSTEM_PROMPT = """Ты — опытный арт-директор и б�
 """
 
 
-def _call_openai(system_prompt: str, dialog_text: str) -> dict:
-    """Shared OpenAI call logic. Returns raw parsed JSON dict."""
+def _call_openai(system_prompt: str, dialog_text: str, max_output_tokens: int) -> dict:
+    """Shared OpenAI call logic. Returns raw parsed JSON dict.
+
+    Uses an explicit timeout and a small bounded retry count instead of SDK
+    defaults, and caps output tokens for the compact JSON schema being
+    requested. Never logs the dialog text or the raw model response — only
+    safe metadata (model, sizes, response id).
+    """
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise EnvironmentError(
@@ -124,14 +142,18 @@ def _call_openai(system_prompt: str, dialog_text: str) -> dict:
         )
 
     model = os.getenv("OPENAI_MODEL", "gpt-4o")
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=api_key, timeout=_REQUEST_TIMEOUT_SECONDS, max_retries=_MAX_RETRIES)
 
-    logger.info("Sending dialog to OpenAI (model: %s) ...", model)
+    logger.info(
+        "Sending dialog to OpenAI (model=%s, dialog_length=%d chars) ...",
+        model, len(dialog_text),
+    )
 
     try:
         response = client.chat.completions.create(
             model=model,
             temperature=0.2,
+            max_completion_tokens=max_output_tokens,
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -139,18 +161,21 @@ def _call_openai(system_prompt: str, dialog_text: str) -> dict:
             ],
         )
     except OpenAIError as exc:
-        logger.error("OpenAI API error: %s", exc)
+        logger.error("OpenAI API error: %s", type(exc).__name__)
         raise
 
     raw_content = response.choices[0].message.content or ""
-    logger.debug("Raw OpenAI response:\n%s", raw_content)
+    logger.debug(
+        "OpenAI response received (id=%s, length=%d chars).",
+        getattr(response, "id", "?"), len(raw_content),
+    )
 
     try:
         return json.loads(raw_content)
     except json.JSONDecodeError as exc:
         raise BriefValidationError(
-            f"OpenAI returned content that is not valid JSON: {exc}\n"
-            f"Response was:\n{raw_content}"
+            f"OpenAI returned content that is not valid JSON ({exc}). "
+            f"Response length: {len(raw_content)} chars."
         ) from exc
 
 
@@ -162,7 +187,7 @@ def extract_design_report_from_dialog(dialog_text: str) -> dict:
         OpenAIError: on API-level failures.
         BriefValidationError: if the response fails schema checks.
     """
-    data = _call_openai(DESIGN_SYSTEM_PROMPT, dialog_text)
+    data = _call_openai(DESIGN_SYSTEM_PROMPT, dialog_text, _MAX_OUTPUT_TOKENS_DESIGN)
     logger.info("Response received — validating design_report schema ...")
     validated = validate_design_report(data)
     logger.info("Schema validation passed.")

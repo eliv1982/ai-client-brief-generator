@@ -101,10 +101,22 @@ def print_file_list(files: list[Path]) -> None:
 
 # ── Dialog file reading ────────────────────────────────────────────────────────
 
+# Practical ceiling for a single dialog transcript. Comfortably covers a long
+# real client conversation while bounding OpenAI request size/cost — checked
+# before any OpenAI call is made. Not a token-precise count, just a simple,
+# documented character bound (see README).
+MAX_DIALOG_CHARS = 120_000
+
+
 def read_dialog_file(path: Path) -> str:
     if not path.exists():
         logger.error("File not found: %s", path)
         print(f"\n[ERROR] Файл не найден: {path}", file=sys.stderr)
+        sys.exit(1)
+
+    if not path.is_file():
+        logger.error("Path is not a file: %s", path)
+        print(f"\n[ERROR] Указанный путь не является файлом: {path}", file=sys.stderr)
         sys.exit(1)
 
     try:
@@ -117,10 +129,25 @@ def read_dialog_file(path: Path) -> str:
             file=sys.stderr,
         )
         sys.exit(1)
+    except OSError as exc:
+        logger.error("Cannot read file %s: %s", path, type(exc).__name__)
+        print(f"\n[ERROR] Не удалось прочитать файл: {path}\n{exc}", file=sys.stderr)
+        sys.exit(1)
 
     if not text.strip():
         logger.error("File is empty: %s", path)
         print(f"\n[ERROR] Файл пустой: {path}", file=sys.stderr)
+        sys.exit(1)
+
+    if len(text) > MAX_DIALOG_CHARS:
+        logger.error(
+            "File too large: %s (%d chars, limit %d)", path, len(text), MAX_DIALOG_CHARS
+        )
+        print(
+            f"\n[ERROR] Файл слишком большой: {path} ({len(text)} символов). "
+            f"Максимальный размер — {MAX_DIALOG_CHARS} символов.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     logger.info("Файл загружен: %s (%d символов).", path, len(text))
@@ -193,7 +220,7 @@ def run_client_report(dialog_path: Path) -> None:
     print(f"\n[OK] Отчет успешно сформирован!\n  -> {pdf_path.resolve()}\n")
 
 
-def run_design_report(dialog_path: Path) -> None:
+def run_design_report(dialog_path: Path, no_image: bool = False) -> None:
     from utils.ai_processor import extract_design_report_from_dialog
     from utils.image_generator import generate_design_image
     from utils.pdf_generator import render_design_report_pdf
@@ -210,8 +237,10 @@ def run_design_report(dialog_path: Path) -> None:
 
     image_prompt = design_data.get("image_prompt", "")
     image_path: Path | None = None
-    if image_prompt:
-        logger.info("Generating concept image ...")
+    if no_image:
+        logger.info("Генерация изображения пропущена (--no-image) — запрос к image API не выполняется.")
+    elif image_prompt:
+        logger.info("Generating concept image ... (дополнительный, потенциально платный запрос к image API)")
         image_path = generate_design_image(image_prompt)
         if image_path:
             logger.info("Concept image ready: %s", image_path)
@@ -382,7 +411,7 @@ def _pick_mode() -> str:
         return canonical_modes[idx - 1]
 
 
-def cmd_interactive(default_mode: str) -> None:
+def cmd_interactive(default_mode: str, no_image: bool = False) -> None:
     files = find_txt_files()
     if not files:
         print_file_list(files)
@@ -397,23 +426,23 @@ def cmd_interactive(default_mode: str) -> None:
     print(f"Тип отчета: {label}\n")
     logger.info("Interactive: выбран '%s', режим=%s", chosen, canonical)
 
-    _dispatch(chosen, canonical)
+    _dispatch(chosen, canonical, no_image)
 
 
-def _dispatch(dialog_path: Path, canonical: str) -> None:
+def _dispatch(dialog_path: Path, canonical: str, no_image: bool = False) -> None:
     if canonical == "client_report":
         run_client_report(dialog_path)
     elif canonical == "design_report":
-        run_design_report(dialog_path)
+        run_design_report(dialog_path, no_image=no_image)
     else:
         print(f"[ERROR] Режим '{canonical}' еще не реализован.", file=sys.stderr)
         sys.exit(1)
 
 
-def cmd_run_file(dialog_path: Path, mode: str) -> None:
+def cmd_run_file(dialog_path: Path, mode: str, no_image: bool = False) -> None:
     canonical = _canonical(mode)
     logger.info("Тип отчета: %s | Файл: %s", _display(canonical), dialog_path)
-    _dispatch(dialog_path, canonical)
+    _dispatch(dialog_path, canonical, no_image)
 
 
 # ── Argument parsing ───────────────────────────────────────────────────────────
@@ -427,8 +456,13 @@ def parse_args() -> argparse.Namespace:
             "Примеры:\n"
             "  python main.py example_dialogs/ai_bot_client_dialog.txt --mode client_report\n"
             "  python main.py example_dialogs/website_design_dialog.txt --mode design_report\n"
+            "  python main.py example_dialogs/website_design_dialog.txt --mode design_report --no-image\n"
             "  python main.py --list-files\n"
-            "  python main.py --interactive"
+            "  python main.py --interactive\n\n"
+            "Примечание про биллинг:\n"
+            "  Генерация изображения в режиме design_report — дополнительный запрос\n"
+            "  к image API и может быть платной. Используйте --no-image, чтобы ее пропустить.\n"
+            "  --test-image выполняет реальный запрос к image API и может быть платным."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -461,7 +495,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--test-image",
         action="store_true",
-        help="Диагностика: сгенерировать тестовое изображение и сохранить в generated_images/.",
+        help=(
+            "Диагностика: выполнить РЕАЛЬНЫЙ запрос к image API и сохранить тестовое "
+            "изображение в generated_images/. Может быть платным запросом."
+        ),
+    )
+    parser.add_argument(
+        "--no-image",
+        action="store_true",
+        help=(
+            "Для --mode design_report: пропустить генерацию AI-изображения — запрос "
+            "к image API не выполняется. PDF формируется с placeholder-блоком вместо "
+            "изображения. Не влияет на --mode client_report."
+        ),
     )
     return parser.parse_args()
 
@@ -480,7 +526,7 @@ def main() -> None:
         return
 
     if args.interactive:
-        cmd_interactive(args.mode)
+        cmd_interactive(args.mode, args.no_image)
         return
 
     if args.dialog_file is None:
@@ -491,7 +537,7 @@ def main() -> None:
         )
         sys.exit(1)
 
-    cmd_run_file(args.dialog_file, args.mode)
+    cmd_run_file(args.dialog_file, args.mode, args.no_image)
 
 
 if __name__ == "__main__":

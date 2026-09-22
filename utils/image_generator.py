@@ -3,13 +3,9 @@
 Generates a cover concept image using the OpenAI Images API.
 Falls back gracefully: on any failure returns None so the PDF is still produced.
 
-Supported models (as of 2026):
-  gpt-image-2      — preferred, higher quality, returns b64_json
-  gpt-image-1      — reliable fallback, returns b64_json
-  chatgpt-image-latest — alias for the current GPT Image flagship
-
-  dall-e-3 / dall-e-2 are previous-generation models and may not be
-  available in all OpenAI projects; not recommended for new projects.
+Image generation is billable — each call is a separate, paid API request
+against the configured OpenAI account. See main.py --no-image to skip it,
+and --test-image for a diagnostic call (also billable).
 
 Configure via .env:
   IMAGE_MODEL=gpt-image-2
@@ -24,16 +20,25 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
+from openai import OpenAI
+
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 IMAGES_DIR = Path("generated_images")
 
-# Safe defaults that work across all model tiers
+# Defaults used when the corresponding .env variable is not set. Actual
+# model availability depends on the configured OpenAI account/project —
+# verify with `python main.py --test-image`.
 _DEFAULT_MODEL = "gpt-image-2"
 _DEFAULT_SIZE = "1024x1024"
 _DEFAULT_QUALITY = "medium"
+
+# ── Bounded network behavior ────────────────────────────────────────────────
+_REQUEST_TIMEOUT_SECONDS = 90.0
+_MAX_RETRIES = 2
+_URL_DOWNLOAD_TIMEOUT_SECONDS = 30
 
 _TEST_PROMPT = (
     "A clean, minimal workspace with a laptop, a cup of coffee, and a notebook, "
@@ -84,13 +89,14 @@ def _generate_raw(prompt: str, model: str, size: str, quality: str) -> bytes:
     if not api_key:
         raise ImageGenError("OPENAI_API_KEY не задан в .env — генерация изображений недоступна.")
 
-    prompt_preview = prompt[:200] + ("..." if len(prompt) > 200 else "")
-    logger.info("Image API call: model=%s  size=%s  quality=%s", model, size, quality)
-    logger.info("Prompt preview: %s", prompt_preview)
+    logger.info(
+        "Image API call: model=%s size=%s quality=%s prompt_length=%d chars",
+        model, size, quality, len(prompt),
+    )
+
+    client = OpenAI(api_key=api_key, timeout=_REQUEST_TIMEOUT_SECONDS, max_retries=_MAX_RETRIES)
 
     try:
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key)
         response = client.images.generate(
             model=model,
             prompt=prompt,
@@ -101,8 +107,7 @@ def _generate_raw(prompt: str, model: str, size: str, quality: str) -> bytes:
     except Exception as exc:
         status_code: int | None = getattr(exc, "status_code", None)
         logger.warning(
-            "Image API request failed: %s | status=%s | %s",
-            type(exc).__name__, status_code, repr(exc),
+            "Image API request failed: %s | status=%s", type(exc).__name__, status_code,
         )
         raise ImageGenError(
             str(exc),
@@ -128,7 +133,7 @@ def _generate_raw(prompt: str, model: str, size: str, quality: str) -> bytes:
     if url:
         logger.debug("Response format: URL")
         try:
-            with urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310
+            with urllib.request.urlopen(url, timeout=_URL_DOWNLOAD_TIMEOUT_SECONDS) as resp:  # noqa: S310
                 return resp.read()
         except Exception as exc:
             raise ImageGenError(f"Ошибка скачивания изображения по URL: {exc}") from exc
@@ -157,9 +162,7 @@ def generate_design_image(image_prompt: str) -> Path | None:
         logger.warning("Image generation failed: %s", exc)
         return None
     except Exception as exc:
-        logger.warning(
-            "Unexpected image generation error: %s | %s", type(exc).__name__, repr(exc)
-        )
+        logger.warning("Unexpected image generation error: %s", type(exc).__name__)
         return None
 
     try:
@@ -167,9 +170,7 @@ def generate_design_image(image_prompt: str) -> Path | None:
         logger.info("Image saved: %s", output_path)
         return output_path
     except Exception as exc:
-        logger.warning(
-            "Failed to save image file: %s | %s", type(exc).__name__, repr(exc)
-        )
+        logger.warning("Failed to save image file: %s", type(exc).__name__)
         return None
 
 
@@ -179,8 +180,7 @@ def list_available_image_models() -> list[str]:
     if not api_key:
         return []
     try:
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key)
+        client = OpenAI(api_key=api_key, timeout=_REQUEST_TIMEOUT_SECONDS, max_retries=_MAX_RETRIES)
         keywords = ("dall", "image", "gpt-image")
         return sorted(
             m.id
@@ -188,12 +188,16 @@ def list_available_image_models() -> list[str]:
             if any(kw in m.id.lower() for kw in keywords)
         )
     except Exception as exc:
-        logger.debug("Could not list models: %s", exc)
+        logger.debug("Could not list models: %s", type(exc).__name__)
         return []
 
 
 def generate_test_image() -> tuple[Path | None, str | None]:
     """Generate a simple test image to verify image API connectivity.
+
+    This performs a real, billable request against the configured OpenAI
+    account — it is a diagnostic entry point, not used during normal report
+    generation.
 
     Returns:
         (path, None)        on success
