@@ -246,6 +246,20 @@ generated_images/design_concept_2026-06-06_15-42-05.png
 
 ---
 
+## Example output
+
+This repository includes a fictional portfolio example generated through the real application pipeline using `example_dialogs/website_design_dialog.txt`.
+
+[View the generated PDF report](docs/sample_design_report.pdf)
+
+![Generated design concept](docs/sample_design_concept.png)
+
+> Fictional demo data only. No real client information is included.
+
+This example was produced end-to-end through the real pipeline — OpenAI text generation, GPT image generation, Jinja2 rendering, and WeasyPrint PDF generation — not from mocked test data.
+
+---
+
 ## Обработка ошибок
 
 | Ситуация | Поведение |
